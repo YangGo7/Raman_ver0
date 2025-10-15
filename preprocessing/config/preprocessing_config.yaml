@@ -1,0 +1,65 @@
+# 전처리 설정 파일 / Preprocessing Configuration File
+
+# ROI 검출 설정 / ROI Detection Settings
+roi:
+  method: 'auto'
+  fallback_bbox: null
+  padding: 20
+
+# 종횡비 정규화 / Aspect Ratio Normalization
+aspect_ratio:
+  target_ratio: 2.0
+  method: 'pad'
+  pad_value: 0
+
+# 해상도 표준화 / Resolution Standardization
+resolution:
+  target_width: 2048
+  target_height: 1024
+  interpolation: 'lanczos'
+  maintain_aspect: true
+
+# 히스토그램 매칭 / Histogram Matching
+histogram_matching:
+  enabled: true  # true로 변경하면 히스토그램 매칭 사용
+  reference_path: 'config/reference_histogram.npy'  # 각 데이터셋별 경로로 변경 필요
+  method: 'exact'
+
+# CLAHE (대비 향상 - 어두운 부분 밝게, 밝은 부분 어둡게 조정)
+clahe:
+  enabled: true  # 데이터셋 간 대비 차이 보정
+  clip_limit: 2.0
+  tile_size: [8, 8]
+
+# 노이즈 제거 / Denoising (노이즈가 많은 저품질 이미지 처리)
+denoising:
+  enabled: false  # 필요시 true로 변경 (처리 시간 증가)
+  method: 'bilateral'
+  strength: 3
+
+# 샤프닝 / Sharpening (흐릿한 이미지 선명하게)
+sharpening:
+  enabled: false  # 필요시 true로 변경
+  strength: 1.0
+
+# 출력 설정 / Output Settings
+output:
+  format: 'png'
+  quality: 95
+  bit_depth: 8
+
+# 라벨 변환 설정 / Label Transformation Settings
+labels:
+  format: 'yolo'
+  validate: true
+  min_bbox_size: 5
+  filter_invalid: true
+
+# 품질 검증 / Quality Validation
+validation:
+  enabled: true
+  min_resolution: [640, 320]
+  max_resolution: [8192, 4096]
+  min_brightness: 10
+  max_brightness: 245
+  blur_threshold: 50

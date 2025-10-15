@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 치과 AI 진단 시스템 - 아키텍처 설계
 
 ## 🎯 프로젝트 개요
@@ -222,3 +223,6 @@ Status: 🆕 신규 개발
 ---
 
 *Last updated: 2025-01-15*
+=======
+# Raman_ver0 
+>>>>>>> cf2dbf9 (Add preprocessing pipeline and configuration)
