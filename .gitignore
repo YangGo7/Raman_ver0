@@ -1,0 +1,48 @@
+# Python base
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment
+venv/
+.env/
+.venv/
+
+# Data & Models
+data/
+datasets/
+results/
+models/
+*.pt
+*.pth
+*.npy
+*.nii
+*.csv
+
+# Preprocessing generated files (전처리 생성 파일)
+analysis_results/
+preprocessing/data/
+
+# Logs & Temp
+logs/
+wandb/
+temp/
+*.log
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Image files (이미지 파일은 제외, 너무 큼)
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.tiff
+
+# Config files - KEEP THESE (설정 파일은 포함)
+!config/*.yaml
+!preprocessing/config/*.yaml
