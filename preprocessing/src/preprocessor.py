@@ -7,9 +7,7 @@ import cv2
 import numpy as np
 import yaml
 from pathlib import Path
-from typing import Tuple, Optional, Dict, Any
-from skimage import exposure, morphology
-from skimage.measure import label, regionprops
+from typing import Tuple, Dict
 import logging
 
 logger = logging.getLogger(__name__)
@@ -29,20 +27,30 @@ class DentalPreprocessor:
             config_path: Path to YAML configuration file
         """
         self.config = self._load_config(config_path)
-        self.target_size = tuple(self.config['preprocessing']['resolution']['target_size'])
-        self.target_ratio = self.config['preprocessing']['aspect_ratio']['target_ratio']
-        
+
+        # Extract target size from config
+        res_config = self.config.get('resolution', {})
+        target_w = res_config.get('target_width', 2048)
+        target_h = res_config.get('target_height', 1024)
+        self.target_size = (target_w, target_h)
+
+        # Extract aspect ratio
+        aspect_config = self.config.get('aspect_ratio', {})
+        self.target_ratio = aspect_config.get('target_ratio', 2.0)
+
         # Load reference histogram for matching
-        if self.config['preprocessing']['intensity']['histogram_matching']['enabled']:
-            ref_path = self.config['preprocessing']['intensity']['histogram_matching']['reference_path']
-            self.reference_histogram = self._load_reference_histogram(ref_path)
+        hist_config = self.config.get('histogram_matching', {})
+        if hist_config.get('enabled', False):
+            ref_path = hist_config.get('reference_path', '')
+            self.reference_histogram = self._load_reference_histogram(ref_path) if ref_path else None
         else:
             self.reference_histogram = None
-        
+
         # Initialize CLAHE
-        if self.config['preprocessing']['intensity']['clahe']['enabled']:
-            clip_limit = self.config['preprocessing']['intensity']['clahe']['clip_limit']
-            tile_size = tuple(self.config['preprocessing']['intensity']['clahe']['tile_grid_size'])
+        clahe_config = self.config.get('clahe', {})
+        if clahe_config.get('enabled', False):
+            clip_limit = clahe_config.get('clip_limit', 2.0)
+            tile_size = tuple(clahe_config.get('tile_size', [8, 8]))
             self.clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_size)
         else:
             self.clahe = None
@@ -51,7 +59,7 @@ class DentalPreprocessor:
     
     def _load_config(self, config_path: str) -> Dict:
         """Load YAML configuration file"""
-        with open(config_path, 'r') as f:
+        with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
         return config
     
@@ -88,7 +96,8 @@ class DentalPreprocessor:
         intermediate_images = {'original': image.copy()}
         
         # Step 1: ROI Detection & Crop
-        if self.config['preprocessing']['roi_detection']['enabled']:
+        roi_config = self.config.get('roi', {})
+        if roi_config.get('method') == 'auto':
             image, roi_info = self.detect_and_crop_roi(image)
             metadata['transforms']['roi'] = roi_info
             intermediate_images['roi_cropped'] = image.copy()
@@ -126,42 +135,49 @@ class DentalPreprocessor:
             cropped_image: Image cropped to ROI
             roi_info: ROI coordinates and metadata
         """
-        cfg = self.config['preprocessing']['roi_detection']
+        cfg = self.config.get('roi', {})
         
         # Apply Otsu's thresholding
         _, binary = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         
         # Morphological operations to clean up
-        kernel = np.ones((cfg['morphology']['kernel_size'], 
-                         cfg['morphology']['kernel_size']), np.uint8)
-        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, 
-                                  iterations=cfg['morphology']['iterations'])
-        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, 
-                                  iterations=cfg['morphology']['iterations'])
+        kernel_size = cfg.get('kernel_size', 5)
+        iterations = cfg.get('iterations', 2)
+        kernel = np.ones((kernel_size, kernel_size), np.uint8)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=iterations)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=iterations)
         
-        # Find largest connected component
-        labeled = label(binary)
-        regions = regionprops(labeled)
-        
-        if not regions:
+        # Find largest connected component using OpenCV
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
+
+        # Skip background (label 0), find largest component
+        if num_labels <= 1:
             # Fallback: use default crop
             logger.warning("No ROI detected, using fallback crop")
             return self._fallback_crop(image), {'method': 'fallback'}
-        
-        # Get largest region
-        largest_region = max(regions, key=lambda r: r.area)
-        
+
+        # Get largest region (excluding background)
+        areas = stats[1:, cv2.CC_STAT_AREA]
+        largest_idx = np.argmax(areas) + 1  # +1 because we skipped background
+
         # Check if area is reasonable
-        min_area = cfg['min_area_ratio'] * image.shape[0] * image.shape[1]
-        if largest_region.area < min_area:
-            logger.warning(f"ROI area too small ({largest_region.area} < {min_area}), using fallback")
+        min_area = cfg.get('min_area_ratio', 0.1) * image.shape[0] * image.shape[1]
+        largest_area = stats[largest_idx, cv2.CC_STAT_AREA]
+
+        if largest_area < min_area:
+            logger.warning(f"ROI area too small ({largest_area} < {min_area}), using fallback")
             return self._fallback_crop(image), {'method': 'fallback'}
-        
+
         # Get bounding box with margin
-        minr, minc, maxr, maxc = largest_region.bbox
+        minc = stats[largest_idx, cv2.CC_STAT_LEFT]
+        minr = stats[largest_idx, cv2.CC_STAT_TOP]
+        width = stats[largest_idx, cv2.CC_STAT_WIDTH]
+        height = stats[largest_idx, cv2.CC_STAT_HEIGHT]
+        maxc = minc + width
+        maxr = minr + height
         height, width = image.shape
         
-        margin = cfg['margin_ratio']
+        margin = cfg.get('margin_ratio', 0.05)
         margin_h = int((maxr - minr) * margin)
         margin_w = int((maxc - minc) * margin)
         
@@ -176,21 +192,21 @@ class DentalPreprocessor:
         roi_info = {
             'method': 'otsu',
             'bbox': [minc, minr, maxc, maxr],  # x1, y1, x2, y2
-            'area_ratio': largest_region.area / (height * width)
+            'area_ratio': largest_area / (height * width)
         }
         
         return cropped, roi_info
     
     def _fallback_crop(self, image: np.ndarray) -> np.ndarray:
         """Fallback crop using predefined margins"""
-        cfg = self.config['preprocessing']['roi_detection']['fallback_crop']
         h, w = image.shape
-        
-        top = int(h * cfg['top'])
-        bottom = h - int(h * cfg['bottom'])
-        left = int(w * cfg['left'])
-        right = w - int(w * cfg['right'])
-        
+
+        # Use default margins if not specified
+        top = int(h * 0.1)
+        bottom = h - int(h * 0.1)
+        left = int(w * 0.05)
+        right = w - int(w * 0.05)
+
         return image[top:bottom, left:right]
     
     def normalize_aspect_ratio(self, image: np.ndarray) -> Tuple[np.ndarray, Dict]:
@@ -204,23 +220,25 @@ class DentalPreprocessor:
             normalized_image: Image with target aspect ratio
             aspect_info: Transformation metadata
         """
-        cfg = self.config['preprocessing']['aspect_ratio']
+        cfg = self.config.get('aspect_ratio', {})
         h, w = image.shape
         current_ratio = w / h
-        target_ratio = cfg['target_ratio']
-        
-        if cfg['method'] == 'pad':
+        target_ratio = cfg.get('target_ratio', 2.0)
+
+        if cfg.get('method') == 'pad':
             # Calculate target dimensions
+            pad_value = cfg.get('pad_value', 0)
+
             if current_ratio < target_ratio:
                 # Image is too narrow, pad width
                 target_w = int(h * target_ratio)
                 pad_w = target_w - w
                 pad_left = pad_w // 2
                 pad_right = pad_w - pad_left
-                
+
                 padded = cv2.copyMakeBorder(
                     image, 0, 0, pad_left, pad_right,
-                    cv2.BORDER_CONSTANT, value=cfg['padding_value']
+                    cv2.BORDER_CONSTANT, value=pad_value
                 )
                 aspect_info = {
                     'method': 'pad_width',
@@ -232,64 +250,111 @@ class DentalPreprocessor:
                 pad_h = target_h - h
                 pad_top = pad_h // 2
                 pad_bottom = pad_h - pad_top
-                
+
                 padded = cv2.copyMakeBorder(
                     image, pad_top, pad_bottom, 0, 0,
-                    cv2.BORDER_CONSTANT, value=cfg['padding_value']
+                    cv2.BORDER_CONSTANT, value=pad_value
                 )
                 aspect_info = {
                     'method': 'pad_height',
                     'pad': [pad_top, pad_bottom, 0, 0]
                 }
-            
+
             aspect_info['original_ratio'] = current_ratio
             aspect_info['target_ratio'] = target_ratio
-            
+
             return padded, aspect_info
-        
+
         else:
             # No padding, just record the ratio
             return image, {'method': 'none', 'ratio': current_ratio}
     
     def standardize_intensity(self, image: np.ndarray) -> Tuple[np.ndarray, Dict]:
         """
-        Step 3: Standardize intensity using histogram matching and CLAHE
-        
+        Step 3: Standardize intensity using brightness normalization, histogram matching and CLAHE
+
         Args:
             image: Input image
-            
+
         Returns:
             standardized_image: Intensity-standardized image
             intensity_info: Processing metadata
         """
         intensity_info = {}
         result = image.copy()
-        
+
+        # Brightness Normalization (적용 우선순위 1)
+        brightness_config = self.config.get('brightness_normalization', {})
+        if brightness_config.get('enabled', False):
+            method = brightness_config.get('method', 'zscore')
+
+            if method == 'zscore':
+                target_mean = brightness_config.get('target_mean', 127.5)
+                target_std = brightness_config.get('target_std', 50.0)
+
+                # Z-score normalization
+                current_mean = np.mean(result)
+                current_std = np.std(result)
+
+                if current_std > 0:
+                    result = (result - current_mean) / current_std
+                    result = result * target_std + target_mean
+                    result = np.clip(result, 0, 255).astype(np.uint8)
+
+                    intensity_info['brightness_normalized'] = {
+                        'method': 'zscore',
+                        'original_mean': float(current_mean),
+                        'original_std': float(current_std),
+                        'target_mean': target_mean,
+                        'target_std': target_std
+                    }
+                else:
+                    logger.warning("Image has zero std, skipping brightness normalization")
+                    intensity_info['brightness_normalized'] = False
+
+            elif method == 'minmax':
+                # Min-Max normalization to [0, 255]
+                min_val = np.min(result)
+                max_val = np.max(result)
+
+                if max_val > min_val:
+                    result = ((result - min_val) / (max_val - min_val) * 255).astype(np.uint8)
+                    intensity_info['brightness_normalized'] = {
+                        'method': 'minmax',
+                        'original_range': [float(min_val), float(max_val)]
+                    }
+                else:
+                    logger.warning("Image has constant intensity, skipping brightness normalization")
+                    intensity_info['brightness_normalized'] = False
+
+            elif method == 'histogram':
+                # Histogram equalization
+                result = cv2.equalizeHist(result)
+                intensity_info['brightness_normalized'] = {'method': 'histogram_equalization'}
+
+            else:
+                logger.warning(f"Unknown brightness normalization method: {method}")
+                intensity_info['brightness_normalized'] = False
+        else:
+            intensity_info['brightness_normalized'] = False
+
         # Histogram Matching
-        if self.config['preprocessing']['intensity']['histogram_matching']['enabled']:
+        hist_config = self.config.get('histogram_matching', {})
+        if hist_config.get('enabled', False):
             if self.reference_histogram is not None:
-                result = exposure.match_histograms(result, self.reference_histogram)
-                intensity_info['histogram_matched'] = True
+                # Simple histogram equalization instead of matching
+                logger.warning("Histogram matching not supported without skimage, using histogram equalization")
+                result = cv2.equalizeHist(result)
+                intensity_info['histogram_matched'] = 'equalized'
             else:
                 logger.warning("Reference histogram not available, skipping histogram matching")
                 intensity_info['histogram_matched'] = False
-        
+
         # CLAHE
-        if self.config['preprocessing']['intensity']['clahe']['enabled'] and self.clahe is not None:
+        if self.clahe is not None:
             result = self.clahe.apply(result)
             intensity_info['clahe_applied'] = True
-        
-        # Normalization
-        norm_cfg = self.config['preprocessing']['intensity']['normalization']
-        if norm_cfg['method'] == 'zscore':
-            mean = np.mean(result)
-            std = np.std(result)
-            result = ((result - mean) / (std + 1e-8) * 50 + 128).clip(0, 255).astype(np.uint8)
-            intensity_info['normalization'] = 'zscore'
-        elif norm_cfg['method'] == 'minmax':
-            result = ((result - result.min()) / (result.max() - result.min() + 1e-8) * 255).astype(np.uint8)
-            intensity_info['normalization'] = 'minmax'
-        
+
         return result, intensity_info
     
     def standardize_resolution(self, image: np.ndarray) -> Tuple[np.ndarray, Dict]:
@@ -303,31 +368,29 @@ class DentalPreprocessor:
             resized_image: Image at target resolution
             resolution_info: Resize metadata
         """
-        cfg = self.config['preprocessing']['resolution']
-        target_w, target_h = cfg['target_size']
+        cfg = self.config.get('resolution', {})
+        target_w = cfg.get('target_width', 2048)
+        target_h = cfg.get('target_height', 1024)
         h, w = image.shape
-        
+
         # Choose interpolation
         interp_methods = {
             'bilinear': cv2.INTER_LINEAR,
             'bicubic': cv2.INTER_CUBIC,
             'lanczos': cv2.INTER_LANCZOS4
         }
-        interp = interp_methods.get(cfg['interpolation'], cv2.INTER_LINEAR)
-        
+        interp_method = cfg.get('interpolation', 'lanczos')
+        interp = interp_methods.get(interp_method, cv2.INTER_LINEAR)
+
         # Resize
-        if cfg['preserve_aspect']:
-            # Already handled in aspect ratio normalization
-            resized = cv2.resize(image, (target_w, target_h), interpolation=interp)
-        else:
-            resized = cv2.resize(image, (target_w, target_h), interpolation=interp)
-        
+        resized = cv2.resize(image, (target_w, target_h), interpolation=interp)
+
         resolution_info = {
             'original_size': [w, h],
             'target_size': [target_w, target_h],
-            'interpolation': cfg['interpolation'],
+            'interpolation': interp_method,
             'scale_x': target_w / w,
             'scale_y': target_h / h
         }
-        
+
         return resized, resolution_info

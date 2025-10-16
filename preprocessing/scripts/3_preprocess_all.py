@@ -42,8 +42,11 @@ def process_single_image(args):
         성공 여부 및 메시지
     """
     image_path, label_path, config_path, output_dir, task_name, visualize = args
-    
+
     try:
+        # Convert to absolute path for multiprocessing
+        config_path = str(Path(config_path).resolve())
+
         # Initialize (each process needs its own instances)
         preprocessor = DentalPreprocessor(config_path)
         label_handler = LabelHandler(format_type='yolo')
@@ -288,7 +291,10 @@ if __name__ == "__main__":
     # Specify absolute paths to image folders here
     # 통합 전처리 설정 사용 / Use unified preprocessing config
     # 모든 데이터셋을 동일한 형식으로 표준화 / Standardize all datasets to same format
-    UNIFIED_CONFIG = 'config/unified_preprocessing_config.yaml'
+
+    # Get script directory and construct absolute config path
+    script_dir = Path(__file__).parent.parent
+    UNIFIED_CONFIG = str((script_dir / 'config' / 'unified_preprocessing_config.yaml').resolve())
 
     data_configs = [
         {
@@ -383,10 +389,16 @@ if __name__ == "__main__":
             print(f"⚠️  이미지 디렉토리를 찾을 수 없습니다: {image_dir}")
             continue
 
-        # 설정 파일 확인 (없으면 기본 설정 사용)
-        if not Path(config_path).exists():
-            print(f"⚠️  설정 파일 없음, 기본 설정 사용: config/preprocessing_config.yaml")
-            config_path = 'config/preprocessing_config.yaml'
+        # 설정 파일 확인 (절대 경로로 변환)
+        # config_path가 이미 절대 경로여야 하지만, 혹시 모를 경우를 대비해 resolve
+        config_path_resolved = Path(config_path).resolve()
+        if not config_path_resolved.exists():
+            # script_dir 사용하지 않고, 현재 스크립트 위치 기준으로 재계산
+            default_config = Path(__file__).parent.parent / 'config' / 'preprocessing_config.yaml'
+            print(f"⚠️  설정 파일 없음, 기본 설정 사용: {default_config}")
+            config_path = str(default_config.resolve())
+        else:
+            config_path = str(config_path_resolved)
 
         # 모든 이미지 찾기
         image_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff']

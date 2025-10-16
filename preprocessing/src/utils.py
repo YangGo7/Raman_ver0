@@ -33,9 +33,17 @@ def setup_logging(log_dir: str = "logs", level: str = "INFO"):
 
 
 def load_image(image_path: str) -> Optional[np.ndarray]:
-    """Load image from file"""
+    """
+    Load image from file (supports Korean/Unicode paths)
+    한글 경로를 지원하는 이미지 로딩
+    """
     try:
-        image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        # Use numpy to read file as bytes, then decode with OpenCV
+        # This workaround supports Korean and other Unicode characters in paths
+        with open(image_path, 'rb') as f:
+            file_bytes = np.frombuffer(f.read(), dtype=np.uint8)
+        image = cv2.imdecode(file_bytes, cv2.IMREAD_GRAYSCALE)
+
         if image is None:
             logger.error(f"Failed to load image: {image_path}")
             return None
@@ -46,16 +54,28 @@ def load_image(image_path: str) -> Optional[np.ndarray]:
 
 
 def save_image(image: np.ndarray, output_path: str, compression: int = 9):
-    """Save image to file"""
+    """
+    Save image to file (supports Korean/Unicode paths)
+    한글 경로를 지원하는 이미지 저장
+    """
     try:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        
+
+        # Encode image to bytes, then write to file
+        # This workaround supports Korean and other Unicode characters in paths
         if output_path.endswith('.png'):
-            cv2.imwrite(output_path, image, [cv2.IMWRITE_PNG_COMPRESSION, compression])
+            success, encoded_image = cv2.imencode('.png', image, [cv2.IMWRITE_PNG_COMPRESSION, compression])
         else:
-            cv2.imwrite(output_path, image)
-        
-        logger.debug(f"Saved image: {output_path}")
+            ext = Path(output_path).suffix
+            success, encoded_image = cv2.imencode(ext, image)
+
+        if success:
+            with open(output_path, 'wb') as f:
+                f.write(encoded_image.tobytes())
+            logger.debug(f"Saved image: {output_path}")
+        else:
+            logger.error(f"Failed to encode image: {output_path}")
+
     except Exception as e:
         logger.error(f"Error saving image {output_path}: {e}")
 

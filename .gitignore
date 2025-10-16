@@ -48,3 +48,13 @@ Thumbs.db
 # Config files - KEEP THESE (설정 파일은 포함)
 !config/*.yaml
 !preprocessing/config/*.yaml
+
+# data 폴터 제외
+.data/
+
+# Windows reserved names
+nul
+con
+prn
+aux
+

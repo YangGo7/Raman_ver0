@@ -20,13 +20,21 @@ resolution:
   interpolation: 'lanczos'
   maintain_aspect: true
 
+# 밝기 정규화 / Brightness Normalization
+brightness_normalization:
+  enabled: true
+  method: 'zscore'  # 'zscore', 'minmax', 'histogram', 'adaptive'
+  target_mean: 127.5
+  target_std: 50.0
+  clip_range: [0, 255]
+
 # 히스토그램 매칭 / Histogram Matching
 histogram_matching:
   enabled: false
 
-# CLAHE
+# CLAHE (Contrast Limited Adaptive Histogram Equalization)
 clahe:
-  enabled: false
+  enabled: true
   clip_limit: 2.0
   tile_size: [8, 8]
 

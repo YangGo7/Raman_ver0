@@ -17,4 +17,4 @@ tqdm>=4.65.0
 
 # 선택적 (GPU 가속) / Optional (GPU acceleration)
 # opencv-contrib-python>=4.8.0
-scikit-image
+# scikit-image  # Windows 빌드 이슈로 주석 처리
